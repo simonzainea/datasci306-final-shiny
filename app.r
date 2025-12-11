@@ -1,6 +1,7 @@
 library(shiny)
 library(dplyr)
 library(ggplot2)
+library(tidyr)   # <<< NEW: for pivot_longer
 
 # ---- Load data once when the app starts ----
 load("data/spotify_mpd_1perc.RData")  # gives attrs_down, tracks_down, etc.
@@ -18,6 +19,78 @@ valid_genres <- genre_counts |>
   filter(n_tracks >= min_n) |>
   arrange(track_genre) |>
   pull(track_genre)
+
+### NEW: numeric features we'll use for "strongest features"
+feature_vars <- c(
+  "danceability", "energy", "key", "loudness", "speechiness",
+  "acousticness", "instrumentalness", "liveness",
+  "valence", "tempo"
+)
+
+### NEW: restrict to genres we actually keep
+spotify_use <- spotify |>
+  filter(track_genre %in% valid_genres)
+
+### NEW: overall mean / sd for each feature (across all kept genres)
+overall_stats <- spotify_use |>
+  summarize(
+    across(
+      all_of(feature_vars),
+      list(
+        mean = ~ mean(.x, na.rm = TRUE),
+        sd   = ~ sd(.x, na.rm = TRUE)
+      ),
+      .names = "{.col}_{.fn}"
+    )
+  ) |>
+  pivot_longer(
+    cols = everything(),
+    names_to = c("feature", ".value"),
+    names_sep = "_"
+  )
+
+### NEW: genre-specific means and z-scores (how “distinctive” a feature is)
+genre_feature_strength <- spotify_use |>
+  group_by(track_genre) |>
+  summarize(
+    across(
+      all_of(feature_vars),
+      ~ mean(.x, na.rm = TRUE),
+      .names = "{.col}_mean_genre"
+    ),
+    .groups = "drop"
+  ) |>
+  pivot_longer(
+    cols = ends_with("_mean_genre"),
+    names_to = "feature",
+    values_to = "genre_mean"
+  ) |>
+  mutate(feature = sub("_mean_genre$", "", feature)) |>
+  left_join(overall_stats, by = "feature") |>
+  mutate(
+    z_score = (genre_mean - mean) / sd,
+    z_score = ifelse(is.na(z_score), 0, z_score)
+  ) |>
+  rename(genre = track_genre)
+
+### NEW: correlations with popularity, by genre
+genre_pop_cor <- spotify_use |>
+  group_by(track_genre) |>
+  summarize(
+    across(
+      all_of(feature_vars),
+      ~ cor(.x, popularity, use = "complete.obs"),
+      .names = "{.col}_cor"
+    ),
+    .groups = "drop"
+  ) |>
+  pivot_longer(
+    cols = ends_with("_cor"),
+    names_to = "feature",
+    values_to = "correlation"
+  ) |>
+  mutate(feature = sub("_cor$", "", feature)) |>
+  rename(genre = track_genre)
 
 # ---- UI ----
 ui <- fluidPage(
@@ -64,17 +137,41 @@ ui <- fluidPage(
           selectInput(
             "feature",
             "Choose a feature:",
-            choices = c(
-              "danceability", "energy", "key", "loudness", "speechiness",
-              "acousticness", "instrumentalness", "liveness",
-              "valence", "tempo"
-            ),
+            choices = feature_vars,
             selected = "danceability"
           )
         ),
         mainPanel(
           h4("Popularity vs selected feature"),
           plotOutput("feature_plot")
+        )
+      )
+    ),
+    
+    ### NEW TAB: strongest features by genre
+    tabPanel(
+      "Strongest features by genre",
+      sidebarLayout(
+        sidebarPanel(
+          selectInput(
+            "genre_strength",
+            "Choose a genre:",
+            choices = valid_genres,
+            selected = valid_genres[1]
+          ),
+          sliderInput(
+            "top_k",
+            "Number of top features to show:",
+            min = 3, max = length(feature_vars),
+            value = 5, step = 1
+          )
+        ),
+        mainPanel(
+          h4("Features that define this genre vs all genres"),
+          plotOutput("genre_signature_plot"),
+          hr(),
+          h4("Features most related to popularity within this genre"),
+          plotOutput("genre_pop_plot")
         )
       )
     )
@@ -153,9 +250,54 @@ server <- function(input, output, session) {
         }
       )
   })
+  
+  ### NEW: strongest features tab
+  
+  # Distinctive features for chosen genre
+  genre_strength_data <- reactive({
+    genre_feature_strength |>
+      filter(genre == input$genre_strength) |>
+      arrange(desc(abs(z_score))) |>
+      slice_head(n = input$top_k)
+  })
+  
+  output$genre_signature_plot <- renderPlot({
+    df <- genre_strength_data()
+    
+    ggplot(df, aes(x = reorder(feature, z_score), y = z_score)) +
+      geom_col() +
+      coord_flip() +
+      labs(
+        x = "Feature",
+        y = "Standardized difference (z-score)",
+        title = paste("Most distinctive features for", input$genre_strength)
+      )
+  })
+  
+  # Popularity-related features for chosen genre
+  genre_pop_data <- reactive({
+    genre_pop_cor |>
+      filter(genre == input$genre_strength) |>
+      arrange(desc(abs(correlation))) |>
+      slice_head(n = input$top_k)
+  })
+  
+  output$genre_pop_plot <- renderPlot({
+    df <- genre_pop_data()
+    
+    ggplot(df, aes(x = reorder(feature, correlation), y = correlation)) +
+      geom_col() +
+      coord_flip() +
+      labs(
+        x = "Feature",
+        y = "Correlation with popularity",
+        title = paste("Features most related to popularity in", input$genre_strength)
+      )
+  })
 }
 
 shinyApp(ui = ui, server = server)
+
 
 
 
