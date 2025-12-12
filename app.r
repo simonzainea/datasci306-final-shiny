@@ -1,7 +1,8 @@
 library(shiny)
 library(dplyr)
 library(ggplot2)
-library(tidyr)   # <<< NEW: for pivot_longer
+library(tidyr) # <<< NEW: for pivot_longer
+library(tidyverse)
 
 # ---- Load data once when the app starts ----
 load("data/spotify_mpd_1perc.RData")  # gives attrs_down, tracks_down, etc.
@@ -13,23 +14,70 @@ spotify <- attrs_down
 genre_counts <- spotify |>
   count(track_genre, name = "n_tracks")
 
-min_n <- 50  # <<< you can change this to 100, 300, etc.
+min_n <- 50
 
 valid_genres <- genre_counts |>
   filter(n_tracks >= min_n) |>
   arrange(track_genre) |>
   pull(track_genre)
 
-### NEW: numeric features we'll use for "strongest features"
+# Restrict to genres we actually keep
+spotify_use <- spotify |>
+  filter(track_genre %in% valid_genres)
+
+# --- Key labels ---
+key_lookup <- tibble(
+  key = 0:11,
+  key_name = c("C", "C♯/D♭", "D", "D♯/E♭", "E", "F",
+               "F♯/G♭", "G", "G♯/A♭", "A", "A♯/B♭", "B")
+)
+
+spotify_keys <- spotify_use |>
+  filter(key %in% 0:11) |>   # drops key = -1
+  left_join(key_lookup, by = "key")
+
+
+# --- Most Distinctive Keys ---
+overall_key_dist <- spotify_keys |>
+  count(key_name) |>
+  mutate(overall_prop = n / sum(n)) |>
+  select(key_name, overall_prop)
+
+genre_key_distinctive <- spotify_keys |>
+  count(track_genre, key_name) |>
+  group_by(track_genre) |>
+  mutate(genre_prop = n / sum(n)) |>
+  ungroup() |>
+  rename(genre = track_genre) |>
+  left_join(overall_key_dist, by = "key_name") |>
+  mutate(diff_prop = genre_prop - overall_prop)
+
+# --- Keys Most Related to Popularity ---
+genre_key_popularity <- spotify_keys |>
+  group_by(track_genre, key_name) |>
+  summarize(
+    n = n(),
+    key_mean_pop = mean(popularity, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  group_by(track_genre) |>
+  mutate(
+    genre_mean_pop = weighted.mean(key_mean_pop, w = n, na.rm = TRUE),
+    diff_pop = key_mean_pop - genre_mean_pop
+  ) |>
+  ungroup() |>
+  rename(genre = track_genre)
+
+
+
+
+# numeric features for "strongest features"
 feature_vars <- c(
-  "danceability", "energy", "key", "loudness", "speechiness",
+  "danceability", "energy", "loudness", "speechiness", #### TOOK OUT KEY
   "acousticness", "instrumentalness", "liveness",
   "valence", "tempo"
 )
 
-### NEW: restrict to genres we actually keep
-spotify_use <- spotify |>
-  filter(track_genre %in% valid_genres)
 
 ### NEW: overall mean / sd for each feature (across all kept genres)
 overall_stats <- spotify_use |>
@@ -56,10 +104,8 @@ genre_feature_strength <- spotify_use |>
     across(
       all_of(feature_vars),
       ~ mean(.x, na.rm = TRUE),
-      .names = "{.col}_mean_genre"
-    ),
-    .groups = "drop"
-  ) |>
+      .names = "{.col}_mean_genre"),
+    .groups = "drop") |>
   pivot_longer(
     cols = ends_with("_mean_genre"),
     names_to = "feature",
@@ -73,7 +119,7 @@ genre_feature_strength <- spotify_use |>
   ) |>
   rename(genre = track_genre)
 
-### NEW: correlations with popularity, by genre
+### Popularity and Genre correlations
 genre_pop_cor <- spotify_use |>
   group_by(track_genre) |>
   summarize(
@@ -92,19 +138,21 @@ genre_pop_cor <- spotify_use |>
   mutate(feature = sub("_cor$", "", feature)) |>
   rename(genre = track_genre)
 
+
+
 # ---- UI ----
 ui <- fluidPage(
   titlePanel("Spotify – Attribute Data Explorer"),
   
   tabsetPanel(
     
-    # Tab 1: raw data preview
+    # Tab 1: Raw Data Preview
     tabPanel(
       "Data preview",
       tableOutput("preview")
     ),
     
-    # Tab 2: popularity distribution by genre
+    # Tab 2: Popularity Distribution by Genre
     tabPanel(
       "Popularity by genre",
       sidebarLayout(
@@ -123,7 +171,7 @@ ui <- fluidPage(
       )
     ),
     
-    # Tab 3: feature vs popularity explorer
+    # Tab 3: Feature vs Popularity Explorer
     tabPanel(
       "Feature explorer",
       sidebarLayout(
@@ -148,7 +196,7 @@ ui <- fluidPage(
       )
     ),
     
-    ### NEW TAB: strongest features by genre
+    # Tab 4: Strongest Features By Genre
     tabPanel(
       "Strongest features by genre",
       sidebarLayout(
@@ -171,12 +219,19 @@ ui <- fluidPage(
           plotOutput("genre_signature_plot"),
           hr(),
           h4("Features most related to popularity within this genre"),
-          plotOutput("genre_pop_plot")
+          plotOutput("genre_pop_plot"),
+          hr(),
+          h4("Most distinctive keys for this genre (vs overall)"),
+          plotOutput("key_distinctive_plot"),
+          hr(),
+          h4("Keys most related to popularity within this genre"),
+          plotOutput("key_popularity_plot"),
         )
       )
     )
   )
 )
+
 
 # ---- Server ----
 server <- function(input, output, session) {
@@ -197,7 +252,7 @@ server <- function(input, output, session) {
     }
   })
   
-  # Tab 2: popularity histogram
+  # Tab 2: Popularity Histogram
   output$pop_hist <- renderPlot({
     df <- filtered_spotify()
     
@@ -229,7 +284,7 @@ server <- function(input, output, session) {
     }
   })
   
-  # Tab 3: feature vs popularity plot
+  # Tab 3: Feature vs Popularity Plot
   output$feature_plot <- renderPlot({
     df <- filtered_feat()
     
@@ -251,7 +306,7 @@ server <- function(input, output, session) {
       )
   })
   
-  ### NEW: strongest features tab
+  # Tab 4: Strongest Features Tab
   
   # Distinctive features for chosen genre
   genre_strength_data <- reactive({
@@ -294,12 +349,51 @@ server <- function(input, output, session) {
         title = paste("Features most related to popularity in", input$genre_strength)
       )
   })
+  
+  # --- Key: distinctive within genre vs overall ---
+  key_distinctive_data <- reactive({
+    genre_key_distinctive |>
+      filter(genre == input$genre_strength) |>
+      arrange(desc(abs(diff_prop))) |>
+      slice_head(n = min(input$top_k, 12))
+  })
+  
+  output$key_distinctive_plot <- renderPlot({
+    df <- key_distinctive_data()
+    
+    ggplot(df, aes(x = reorder(key_name, diff_prop), y = diff_prop)) +
+      geom_col() +
+      coord_flip() +
+      labs(
+        x = "Key",
+        y = "Difference in proportion vs overall",
+        title = paste("Most over/under-represented keys in", input$genre_strength)
+      )
+  })
+  
+  # --- Key: popularity association within genre ---
+  key_popularity_data <- reactive({
+    genre_key_popularity |>
+      filter(genre == input$genre_strength) |>
+      arrange(desc(abs(diff_pop))) |>
+      slice_head(n = min(input$top_k, 12))
+  })
+  
+  output$key_popularity_plot <- renderPlot({
+    df <- key_popularity_data()
+    
+    ggplot(df, aes(x = reorder(key_name, diff_pop), y = diff_pop)) +
+      geom_col() +
+      coord_flip() +
+      labs(
+        x = "Key",
+        y = "Avg popularity minus genre avg",
+        title = paste("Keys most associated with popularity in", input$genre_strength),
+        subtitle = "Positive = higher avg popularity than the genre baseline"
+      )
+  })
+  
+  
 }
 
 shinyApp(ui = ui, server = server)
-
-
-
-
-
-
