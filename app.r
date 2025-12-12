@@ -142,6 +142,34 @@ genre_pop_cor <- spotify_use |>
 
 # ---- UI ----
 ui <- fluidPage(
+  tags$head(
+    tags$link(
+      href = "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap",
+      rel = "stylesheet"
+    ),
+    tags$style(HTML("
+    body {
+      font-family: 'Inter', sans-serif;
+    }
+
+    h1, h2, h3 {
+      font-weight: 600;
+    }
+
+    .sidebar {
+      font-weight: 500;
+    }
+
+    .shiny-input-container label {
+      font-size: 0.85rem;
+      letter-spacing: 0.02em;
+    }
+  "))
+  ),
+  
+  
+  
+  
   titlePanel("Spotify – Attribute Data Explorer"),
   
   tabsetPanel(
@@ -261,10 +289,19 @@ server <- function(input, output, session) {
     )
     
     ggplot(df, aes(x = popularity)) +
-      geom_histogram(bins = 30) +
+      geom_histogram(
+        aes(fill = after_stat(count)),
+        bins = 30,
+        color = NA
+      ) +
+      scale_fill_gradient(
+        low = "#1ED760",
+        high = "#0B5D2A"
+      ) +
       labs(
         x = "Popularity",
         y = "Number of tracks",
+        fill = "Track count",
         title = if (input$genre == "All genres") {
           "Popularity distribution (filtered to genres with enough tracks)"
         } else {
@@ -272,6 +309,7 @@ server <- function(input, output, session) {
         }
       )
   })
+  
   
   # ---- Helper: filtered data for the feature explorer tab ----
   filtered_feat <- reactive({
@@ -320,13 +358,16 @@ server <- function(input, output, session) {
     df <- genre_strength_data()
     
     ggplot(df, aes(x = reorder(feature, z_score), y = z_score)) +
-      geom_col() +
+      geom_col(aes(fill = abs(z_score)), color = NA) +
+      scale_fill_gradient(low = "#1ED760", high = "#0B5D2A") +
       coord_flip() +
       labs(
         x = "Feature",
         y = "Standardized difference (z-score)",
+        fill = "|z|",
         title = paste("Most distinctive features for", input$genre_strength)
-      )
+      ) +
+      theme(legend.position = "none")
   })
   
   # Popularity-related features for chosen genre
@@ -341,13 +382,16 @@ server <- function(input, output, session) {
     df <- genre_pop_data()
     
     ggplot(df, aes(x = reorder(feature, correlation), y = correlation)) +
-      geom_col() +
+      geom_col(aes(fill = abs(correlation)), color = NA) +
+      scale_fill_gradient(low = "#1ED760", high = "#0B5D2A") +
       coord_flip() +
       labs(
         x = "Feature",
         y = "Correlation with popularity",
+        fill = "|r|",
         title = paste("Features most related to popularity in", input$genre_strength)
-      )
+      ) +
+      theme(legend.position = "none")
   })
   
   # --- Key: distinctive within genre vs overall ---
@@ -362,13 +406,16 @@ server <- function(input, output, session) {
     df <- key_distinctive_data()
     
     ggplot(df, aes(x = reorder(key_name, diff_prop), y = diff_prop)) +
-      geom_col() +
+      geom_col(aes(fill = abs(diff_prop)), color = NA) +
+      scale_fill_gradient(low = "#1ED760", high = "#0B5D2A") +
       coord_flip() +
       labs(
         x = "Key",
         y = "Difference in proportion vs overall",
+        fill = "|Δ|",
         title = paste("Most over/under-represented keys in", input$genre_strength)
-      )
+      ) +
+      theme(legend.position = "none")
   })
   
   # --- Key: popularity association within genre ---
@@ -383,14 +430,17 @@ server <- function(input, output, session) {
     df <- key_popularity_data()
     
     ggplot(df, aes(x = reorder(key_name, diff_pop), y = diff_pop)) +
-      geom_col() +
+      geom_col(aes(fill = abs(diff_pop)), color = NA) +
+      scale_fill_gradient(low = "#1ED760", high = "#0B5D2A") +
       coord_flip() +
       labs(
         x = "Key",
         y = "Avg popularity minus genre avg",
+        fill = "|Δ|",
         title = paste("Keys most associated with popularity in", input$genre_strength),
         subtitle = "Positive = higher avg popularity than the genre baseline"
-      )
+      ) +
+      theme(legend.position = "none")
   })
   
   

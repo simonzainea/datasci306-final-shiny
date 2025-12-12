@@ -1,0 +1,12 @@
+name: datasci306-final-shiny
+title: datasci306-final-shiny
+username: 9aaua9-simon-zainea
+account: 9aaua9-simon-zainea
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 16305031
+bundleId: 11316667
+url: https://9aaua9-simon-zainea.shinyapps.io/datasci306-final-shiny/
+version: 1
+asMultiple: FALSE
+asStatic: FALSE
